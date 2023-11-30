@@ -111,6 +111,7 @@ class LLMEngine:
 
         # Profile the memory usage and initialize the cache.
         self._init_cache()
+        self._init_msccl_comm()
 
         # Create the scheduler.
         self.scheduler = Scheduler(scheduler_config, cache_config)
@@ -217,6 +218,14 @@ class LLMEngine:
 
         # Initialize the cache.
         self._run_workers("init_cache_engine", cache_config=self.cache_config)
+
+    def _init_msccl_comm(self) -> None:
+        """Initializes the MSCCL communicator."""
+        self._run_workers("init_msccl_comm", get_all_outputs=True)
+
+    def stop_msccl_proxy(self) -> None:
+        """Stops the MSCCL proxy."""
+        self._run_workers("stop_msccl_proxy", get_all_outputs=True)
 
     @classmethod
     def from_engine_args(cls, engine_args: EngineArgs) -> "LLMEngine":

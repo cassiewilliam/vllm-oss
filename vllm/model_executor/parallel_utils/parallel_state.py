@@ -5,15 +5,77 @@
 """Model and data parallel groups."""
 
 import torch
+from mscclpp import ProxyService
+from mscclpp.comm import CommGroup
 
 # Tensor model parallel group that the current rank belongs to.
 _TENSOR_MODEL_PARALLEL_GROUP = None
+_MSCCL_TENSOR_MODEL_PARALLEL_GROUP = None
 # Pipeline model parallel group that the current rank belongs to.
 _PIPELINE_MODEL_PARALLEL_GROUP = None
+# If tensor_model_parallelism is done using MSCCLPP
+_TENSOR_MODEL_PARALLEL_MSCCLPP = False
+# Communication stream
+_MSCCL_COMM_STREAM = None
+# Proxy service
+_PROXY_SERVICE = None
 
-# A list of global ranks for each pipeline group to ease calculation of the
-# source rank when broadcasting from the first or last pipeline stage.
-_PIPELINE_GLOBAL_RANKS = None
+
+def initialize_model_parallel_msccl(
+    mscccl_group: CommGroup,
+    proxy_service: ProxyService = None,
+    tensor_model_parallel_size: int = 1,
+    pipeline_model_parallel_size: int = 1,
+    sep_prompt_token: bool = False,
+) -> None:
+
+    world_size: int = mscccl_group.nranks
+
+    mult = 1
+    # TODO(aashaka) remove hardcoding of mult
+    if sep_prompt_token:
+        mult = 2
+
+    if (world_size !=
+            tensor_model_parallel_size * pipeline_model_parallel_size * mult):
+        raise RuntimeError(
+            f"world_size ({world_size}) is not equal to "
+            f"tensor_model_parallel_size ({tensor_model_parallel_size}) x "
+            f"pipeline_model_parallel_size ({pipeline_model_parallel_size}) x"
+            f"mult ({mult})")
+
+    num_tensor_model_parallel_groups: int = (world_size //
+                                             tensor_model_parallel_size)
+    num_pipeline_model_parallel_groups: int = (world_size //
+                                               pipeline_model_parallel_size)
+    rank = mscccl_group.my_rank
+
+    # Build the tensor model-parallel groups.
+    global _MSCCL_TENSOR_MODEL_PARALLEL_GROUP
+    assert _MSCCL_TENSOR_MODEL_PARALLEL_GROUP is None, (
+        "tensor model parallel group is already initialized")
+
+    ports = [str(51001 + i) for i in range(num_tensor_model_parallel_groups)]
+    for i in range(num_tensor_model_parallel_groups):
+        ranks = range(i * tensor_model_parallel_size,
+                      (i + 1) * tensor_model_parallel_size)
+        if rank in ranks:
+            iface_ip_port = "eth0:10.0.0.5:" + ports[i]
+            tp_msccl_group = CommGroup(
+                interfaceIpPortTrio=iface_ip_port,
+                rank=mscccl_group.my_rank % tensor_model_parallel_size,
+                size=tensor_model_parallel_size,
+            )
+            _MSCCL_TENSOR_MODEL_PARALLEL_GROUP = tp_msccl_group
+
+    global _TENSOR_MODEL_PARALLEL_MSCCLPP
+    _TENSOR_MODEL_PARALLEL_MSCCLPP = True
+
+    global _MSCCL_COMM_STREAM
+    _MSCCL_COMM_STREAM = torch.cuda.Stream()
+
+    # global _PROXY_SERVICE
+    # _PROXY_SERVICE = proxy_service
 
 
 def initialize_model_parallel(
@@ -129,7 +191,10 @@ def get_pipeline_model_parallel_rank():
 def get_tensor_model_parallel_src_rank():
     """Calculate the global rank corresponding to the first local rank
     in the tensor model parallel group."""
-    global_rank = torch.distributed.get_rank()
+    if _TENSOR_MODEL_PARALLEL_MSCCLPP:
+        global_rank = _TENSOR_MODEL_PARALLEL_GROUP.my_rank
+    else:
+        global_rank = torch.distributed.get_rank()
     local_world_size = get_tensor_model_parallel_world_size()
     return (global_rank // local_world_size) * local_world_size
 
@@ -169,6 +234,35 @@ def get_pipeline_model_parallel_prev_rank():
     return _PIPELINE_GLOBAL_RANKS[(rank_in_pipeline - 1) % world_size]
 
 
+def get_msccl_tensor_model_parallel_group():
+    """Get the tensor model parallel group the caller rank belongs to."""
+    assert _MSCCL_TENSOR_MODEL_PARALLEL_GROUP is not None, (
+        "MSCCLPP tensor model parallel group is not initialized")
+    return _MSCCL_TENSOR_MODEL_PARALLEL_GROUP
+
+
+def get_msccl_tensor_model_parallel_world_size():
+    """Return world size for the msccl tensor model parallel group."""
+    return _MSCCL_TENSOR_MODEL_PARALLEL_GROUP.nranks
+
+
+def get_msccl_tensor_model_parallel_rank():
+    """Return my rank for the tensor model parallel group."""
+    return _MSCCL_TENSOR_MODEL_PARALLEL_GROUP.my_rank
+
+
+def get_msccl_comm_stream():
+    return _MSCCL_COMM_STREAM
+
+def is_mscclpp_tp():
+    """Return true if tensor model parallelism is done using MSCCLPP"""
+    return _TENSOR_MODEL_PARALLEL_MSCCLPP
+
+def get_proxy_service():
+    """Return the proxy service"""
+    return _PROXY_SERVICE
+
+
 def destroy_model_parallel():
     """Set the groups to none."""
     global _TENSOR_MODEL_PARALLEL_GROUP
@@ -177,3 +271,5 @@ def destroy_model_parallel():
     _PIPELINE_MODEL_PARALLEL_GROUP = None
     global _PIPELINE_GLOBAL_RANKS
     _PIPELINE_GLOBAL_RANKS = None
+    global _TENSOR_MODEL_PARALLEL_MSCCLPP
+    _TENSOR_MODEL_PARALLEL_MSCCLPP = False

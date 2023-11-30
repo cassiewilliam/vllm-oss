@@ -19,6 +19,7 @@ class EngineArgs:
     dtype: str = 'auto'
     seed: int = 0
     max_model_len: Optional[int] = None
+    do_mscclpp_tp: bool = False
     worker_use_ray: bool = False
     pipeline_parallel_size: int = 1
     tensor_parallel_size: int = 1
@@ -114,6 +115,9 @@ class EngineArgs:
                             help='model context length. If unspecified, '
                             'will be automatically derived from the model.')
         # Parallel arguments
+        parser.add_argument('--do-mscclpp-tp',
+                            action='store_true',
+                            help='enable MSCCLPP tensor parallelism')
         parser.add_argument('--worker-use-ray',
                             action='store_true',
                             help='use Ray for distributed serving, will be '
@@ -195,7 +199,8 @@ class EngineArgs:
             getattr(model_config.hf_config, 'sliding_window', None))
         parallel_config = ParallelConfig(self.pipeline_parallel_size,
                                          self.tensor_parallel_size,
-                                         self.worker_use_ray)
+                                         self.worker_use_ray,
+                                         self.do_mscclpp_tp)
         scheduler_config = SchedulerConfig(self.max_num_batched_tokens,
                                            self.max_num_seqs,
                                            model_config.max_model_len,

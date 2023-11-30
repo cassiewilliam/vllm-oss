@@ -5,11 +5,13 @@ from typing import Dict, List, Tuple, Optional
 import torch
 import torch.distributed
 
+# from mscclpp import Host2DeviceSemaphore, SimpleProxyChannel, ProxyService
+from mscclpp.comm import CommGroup
 from vllm.config import (CacheConfig, ModelConfig, ParallelConfig,
                          SchedulerConfig)
 from vllm.model_executor import get_model, InputMetadata, set_random_seed
 from vllm.model_executor.parallel_utils.parallel_state import (
-    initialize_model_parallel)
+    initialize_model_parallel, initialize_model_parallel_msccl)
 from vllm.sampling_params import SamplingParams, SamplingType
 from vllm.sequence import SamplerOutput, SequenceData, SequenceGroupMetadata
 from vllm.worker.cache_engine import CacheEngine
@@ -46,6 +48,7 @@ class Worker:
         self.cache_engine = None
         self.cache_events = None
         self.gpu_cache = None
+        self.msccl_group = None
 
     def init_model(self):
         # This env var set by Ray causes exceptions with graph building.
@@ -64,10 +67,18 @@ class Worker:
         # Initialize the distributed environment.
         _init_distributed_environment(self.parallel_config, self.rank,
                                       self.distributed_init_method)
+        self.msccl_group, self.proxy_service = _init_msccl_distributed_environment(self.parallel_config, self.rank)
+
 
         # Initialize the model.
         set_random_seed(self.model_config.seed)
         self.model = get_model(self.model_config)
+
+    def init_msccl_comm(self):
+        return
+
+    def stop_msccl_proxy(self):
+        return
 
     @torch.inference_mode()
     def profile_num_available_blocks(
@@ -407,6 +418,32 @@ def _init_distributed_environment(
     initialize_model_parallel(parallel_config.tensor_parallel_size,
                               parallel_config.pipeline_parallel_size)
 
+def _init_msccl_distributed_environment(parallel_config, rank) -> CommGroup:
+    # os.environ['MSCCLPP_DEBUG'] = 'INFO'
+    # os.environ['MSCCLPP_DEBUG_SUBSYS'] = 'ALL'
+    # TODO get this programmatically
+    os.environ['MSCCLPP_HCA_DEVICES'] = 'mlx5_0,mlx5_1,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8'
+    # TODO get this programmatically
+    iface_ip_port = "eth0:10.0.0.5:51000"
+    msccl_group = CommGroup(
+        interfaceIpPortTrio=iface_ip_port,
+        rank=rank,
+        size=parallel_config.world_size,
+    )
+
+    # proxy_service = ProxyService()
+    # proxy_service.start_proxy()
+    proxy_service = None
+
+    # A small all_reduce for warmup.
+    torch.distributed.all_reduce(torch.zeros(1).cuda())
+    if parallel_config.do_mscclpp_tp:
+        initialize_model_parallel_msccl(msccl_group, proxy_service,
+                                        parallel_config.tensor_parallel_size,
+                                        parallel_config.pipeline_parallel_size,
+                                        sep_prompt_token=False)
+
+    return msccl_group, proxy_service
 
 def _pad_to_alignment(x: List[int], multiple_of: int, pad: int) -> List[int]:
     return x + [pad] * ((-len(x)) % multiple_of)

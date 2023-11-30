@@ -257,10 +257,12 @@ class ParallelConfig:
         pipeline_parallel_size: int,
         tensor_parallel_size: int,
         worker_use_ray: bool,
+        do_mscclpp_tp: bool = False,
     ) -> None:
         self.pipeline_parallel_size = pipeline_parallel_size
         self.tensor_parallel_size = tensor_parallel_size
         self.worker_use_ray = worker_use_ray
+        self.do_mscclpp_tp = do_mscclpp_tp
 
         self.world_size = pipeline_parallel_size * tensor_parallel_size
         if self.world_size > 1:

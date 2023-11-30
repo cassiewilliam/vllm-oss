@@ -74,10 +74,10 @@ class LlamaMLP(nn.Module):
                              "Only silu is supported for now.")
         self.act_fn = SiluAndMul()
 
-    def forward(self, x):
+    def forward(self, x, layer_idx = None):
         gate_up, _ = self.gate_up_proj(x)
         x = self.act_fn(gate_up)
-        x, _ = self.down_proj(x)
+        x, _ = self.down_proj(x, layer_idx=layer_idx, calltype="mlp")
         return x
 
 
@@ -147,13 +147,14 @@ class LlamaAttention(nn.Module):
         kv_cache: KVCache,
         input_metadata: InputMetadata,
         cache_event: Optional[torch.cuda.Event],
+        layer_idx = None,
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         k_cache, v_cache = kv_cache
         attn_output = self.attn(positions, q, k, v, k_cache, v_cache,
                                 input_metadata, cache_event)
-        output, _ = self.o_proj(attn_output)
+        output, _ = self.o_proj(attn_output, layer_idx=layer_idx, calltype="attn")
         return output
 
 
@@ -197,6 +198,7 @@ class LlamaDecoderLayer(nn.Module):
         kv_cache: KVCache,
         input_metadata: InputMetadata,
         cache_event: Optional[torch.cuda.Event],
+        layer_idx = None,
     ) -> torch.Tensor:
         # Self Attention
         residual = hidden_states
@@ -207,13 +209,14 @@ class LlamaDecoderLayer(nn.Module):
             kv_cache=kv_cache,
             input_metadata=input_metadata,
             cache_event=cache_event,
+            layer_idx=layer_idx,
         )
         hidden_states = residual + hidden_states
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
+        hidden_states = self.mlp(hidden_states, layer_idx=layer_idx)
         hidden_states = residual + hidden_states
         return hidden_states
 
@@ -260,6 +263,7 @@ class LlamaModel(nn.Module):
                 kv_caches[i],
                 input_metadata,
                 cache_event,
+                layer_idx=i,
             )
         hidden_states = self.norm(hidden_states)
         return hidden_states

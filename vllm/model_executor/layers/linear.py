@@ -1,12 +1,16 @@
 from abc import ABC, abstractmethod
+from mscclpp_benchmark import MscclppAllReduce1, MscclppAllReduce2, MscclppAllReduce4, MscclppAllReduce5
 from typing import Dict, List, Optional
 
+import time
 import torch
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 from vllm.model_executor.parallel_utils.parallel_state import (
-    get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size)
+    get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size,
+    get_msccl_tensor_model_parallel_rank, get_msccl_tensor_model_parallel_group,
+    is_mscclpp_tp)
 from vllm.model_executor.parallel_utils.communication_op import (
     tensor_model_parallel_all_reduce, tensor_model_parallel_all_gather)
 from vllm.model_executor.parallel_utils.utils import (
@@ -451,6 +455,9 @@ class RowParallelLinear(torch.nn.Module):
         params_dtype: Data type for the parameters.
         linear_method: (Maybe quantized) linear method.
     """
+    all_reduce_buff = None
+    mscclpp_ar1_call = None
+    mscclpp_ar2_call = None
 
     def __init__(
         self,
@@ -514,7 +521,7 @@ class RowParallelLinear(torch.nn.Module):
         assert param_data.shape == loaded_weight.shape
         param_data.copy_(loaded_weight)
 
-    def forward(self, input_):
+    def forward(self, input_, layer_idx, calltype):
         # Set up backprop all-reduce.
         if self.input_is_parallel:
             input_parallel = input_
@@ -524,11 +531,49 @@ class RowParallelLinear(torch.nn.Module):
                 input_, num_partitions=self.tp_size)
             input_parallel = splitted_input[tp_rank].contiguous()
 
+        do_allreduce = self.reduce_results and self.tp_size > 1
+        do_msccl_tp = is_mscclpp_tp()
+        b1 = input_parallel.size(0)
+        b2 = input_parallel.size(1)
+        b3 = self.output_size
+        numel = b1 * b2 * b3
+        elsize = input_parallel.element_size()
+
+        if do_allreduce and do_msccl_tp and (RowParallelLinear.all_reduce_buff is None or RowParallelLinear.all_reduce_buff.size(0) < numel):
+            RowParallelLinear.all_reduce_buff = torch.zeros(numel, device=torch.cuda.current_device(), dtype=input_parallel.dtype)
+            if numel * elsize < 2**20:
+                RowParallelLinear.mscclpp_ar2_call = MscclppAllReduce2(get_msccl_tensor_model_parallel_group(), RowParallelLinear.all_reduce_buff)
+            else:
+                RowParallelLinear.mscclpp_ar1_call = MscclppAllReduce1(get_msccl_tensor_model_parallel_group(), RowParallelLinear.all_reduce_buff)
+
+        if do_allreduce and do_msccl_tp and numel * elsize < 2**20 and RowParallelLinear.mscclpp_ar2_call is None:
+            RowParallelLinear.mscclpp_ar2_call = MscclppAllReduce2(get_msccl_tensor_model_parallel_group(), RowParallelLinear.all_reduce_buff)
+
         # Matrix multiply.
         output_parallel = self.linear_method.apply_weights(
             self.linear_weights, input_parallel)
-        if self.reduce_results and self.tp_size > 1:
-            output_ = tensor_model_parallel_all_reduce(output_parallel)
+        # print(output_parallel.dtype, input_parallel.dtype, flush=True)
+        # print("OUTPUT SIZE:", output_parallel.size(), input_parallel.size(), self.output_size, flush=True)
+        # RowParallelLinear.all_reduce_buff[(b1,b2,b3)][:,:,:] = output_parallel.clone()
+        # torch.cuda.synchronize()
+        # input_sum_msccl = torch.sum(RowParallelLinear.all_reduce_buff[(b1,b2,b3)])
+        # input_sum_nccl = torch.sum(output_parallel)
+        # torch.cuda.synchronize()
+        # print(f"Input sum: {torch.sum(output_parallel)}, {torch.isnan(output_parallel).any().item()}, {torch.isinf(output_parallel).any().item()}, {torch.sum(RowParallelLinear.all_reduce_buff[(b1,b2,b3)])},  {torch.isnan(RowParallelLinear.all_reduce_buff[(b1,b2,b3)]).any().item()},  {torch.isinf(RowParallelLinear.all_reduce_buff[(b1,b2,b3)]).any().item()}", flush=True)
+
+        if do_allreduce:
+            if do_msccl_tp:
+                RowParallelLinear.all_reduce_buff[:numel] = output_parallel.reshape(-1)
+                if numel * elsize < 2**20:
+                    output_ = RowParallelLinear.mscclpp_ar2_call(torch.cuda.current_stream().cuda_stream, output_parallel.reshape(-1), numel).reshape(b1,b2,b3)
+                else:
+                    output_ = RowParallelLinear.mscclpp_ar1_call(torch.cuda.current_stream().cuda_stream, numel)[:numel].clone().reshape(b1,b2,b3)
+            else:
+                output_ = tensor_model_parallel_all_reduce(output_parallel)
+            # if not torch.allclose(output_msccl, output_, atol=1):
+            #     indices = torch.nonzero(torch.abs(output_msccl - output_) >= 0.5)
+            #     if indices.numel() > 0:
+            #         print(f"{calltype} {layer_idx} {indices.shape} output_msccl[{indices[0][0]},{indices[0][1]},{indices[0][2]}]: {output_msccl[indices[0][0],indices[0][1],indices[0][2]]} != output_[{indices[0][0]},{indices[0][1]},{indices[0][2]}]: {output_[indices[0][0],indices[0][1],indices[0][2]]}  Input sum: {input_sum_nccl}, {input_sum_msccl}", flush=True)
         else:
             output_ = output_parallel
 
