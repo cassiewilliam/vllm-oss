@@ -10,12 +10,12 @@ import setuptools
 import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
 
+# import mscclpp
+
 ROOT_DIR = os.path.dirname(__file__)
 
-MAIN_CUDA_VERSION = "12.1"
-
 # Supported NVIDIA GPU architectures.
-SUPPORTED_ARCHS = {"7.0", "7.5", "8.0", "8.6", "8.9", "9.0"}
+SUPPORTED_ARCHS = ["7.0", "7.5", "8.0", "8.6", "8.9", "9.0"]
 
 # Compiler flags.
 CXX_FLAGS = ["-g", "-O2", "-std=c++17"]
@@ -51,32 +51,19 @@ def get_torch_arch_list() -> Set[str]:
     # and executed on the 8.6 or newer architectures. While the PTX code will
     # not give the best performance on the newer architectures, it provides
     # forward compatibility.
-    env_arch_list = os.environ.get("TORCH_CUDA_ARCH_LIST", None)
-    if env_arch_list is None:
+    valid_arch_strs = SUPPORTED_ARCHS + [s + "+PTX" for s in SUPPORTED_ARCHS]
+    arch_list = os.environ.get("TORCH_CUDA_ARCH_LIST", None)
+    if arch_list is None:
         return set()
 
     # List are separated by ; or space.
-    torch_arch_list = set(env_arch_list.replace(" ", ";").split(";"))
-    if not torch_arch_list:
-        return set()
-
-    # Filter out the invalid architectures and print a warning.
-    valid_archs = SUPPORTED_ARCHS.union({s + "+PTX" for s in SUPPORTED_ARCHS})
-    arch_list = torch_arch_list.intersection(valid_archs)
-    # If none of the specified architectures are valid, raise an error.
-    if not arch_list:
-        raise RuntimeError(
-            "None of the CUDA architectures in `TORCH_CUDA_ARCH_LIST` env "
-            f"variable ({env_arch_list}) is supported. "
-            f"Supported CUDA architectures are: {valid_archs}.")
-    invalid_arch_list = torch_arch_list - valid_archs
-    if invalid_arch_list:
-        warnings.warn(
-            f"Unsupported CUDA architectures ({invalid_arch_list}) are "
-            "excluded from the `TORCH_CUDA_ARCH_LIST` env variable "
-            f"({env_arch_list}). Supported CUDA architectures are: "
-            f"{valid_archs}.")
-    return arch_list
+    arch_list = arch_list.replace(" ", ";").split(";")
+    for arch in arch_list:
+        if arch not in valid_arch_strs:
+            raise ValueError(
+                f"Unsupported CUDA arch ({arch}). "
+                f"Valid CUDA arch strings are: {valid_arch_strs}.")
+    return set(arch_list)
 
 
 # First, check the TORCH_CUDA_ARCH_LIST environment variable.
@@ -96,7 +83,7 @@ nvcc_cuda_version = get_nvcc_cuda_version(CUDA_HOME)
 if not compute_capabilities:
     # If no GPU is specified nor available, add all supported architectures
     # based on the NVCC CUDA version.
-    compute_capabilities = SUPPORTED_ARCHS.copy()
+    compute_capabilities = set(SUPPORTED_ARCHS)
     if nvcc_cuda_version < Version("11.1"):
         compute_capabilities.remove("8.6")
     if nvcc_cuda_version < Version("11.8"):
@@ -149,6 +136,8 @@ cache_extension = CUDAExtension(
         "cxx": CXX_FLAGS,
         "nvcc": NVCC_FLAGS,
     },
+    include_dirs=["/home/azureuser/miniconda3/envs/vllm/lib/python3.10/site-packages/mscclpp/include",
+                  '/home/azureuser/miniconda3/envs/vllm/lib/python3.10/site-packages/nanobind/include']
 )
 ext_modules.append(cache_extension)
 
@@ -227,7 +216,7 @@ def get_path(*filepath) -> str:
     return os.path.join(ROOT_DIR, *filepath)
 
 
-def find_version(filepath: str) -> str:
+def find_version(filepath: str):
     """Extract version information from the given filepath.
 
     Adapted from https://github.com/ray-project/ray/blob/0b190ee1160eeca9796bc091e07eaebf4c85b511/python/setup.py
@@ -240,22 +229,9 @@ def find_version(filepath: str) -> str:
         raise RuntimeError("Unable to find version string.")
 
 
-def get_vllm_version() -> str:
-    version = find_version(get_path("vllm", "__init__.py"))
-    cuda_version = str(nvcc_cuda_version)
-    if cuda_version != MAIN_CUDA_VERSION:
-        cuda_version_str = cuda_version.replace(".", "")[:3]
-        version += f"+cu{cuda_version_str}"
-    return version
-
-
 def read_readme() -> str:
-    """Read the README file if present."""
-    p = get_path("README.md")
-    if os.path.isfile(p):
-        return io.open(get_path("README.md"), "r", encoding="utf-8").read()
-    else:
-        return ""
+    """Read the README file."""
+    return io.open(get_path("README.md"), "r", encoding="utf-8").read()
 
 
 def get_requirements() -> List[str]:
@@ -267,7 +243,7 @@ def get_requirements() -> List[str]:
 
 setuptools.setup(
     name="vllm",
-    version=get_vllm_version(),
+    version=find_version(get_path("vllm", "__init__.py")),
     author="vLLM Team",
     license="Apache 2.0",
     description=("A high-throughput and memory-efficient inference and "
