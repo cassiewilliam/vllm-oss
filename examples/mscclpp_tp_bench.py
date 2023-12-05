@@ -6,6 +6,55 @@ import torch
 from vllm import EngineArgs, LLM, LLMEngine, SamplingParams
 
 
+def run_nvprof(llm, sampling_params, prompt_token_ids, prompt_len):
+    outputs = []
+    num_iters = 5
+    start_iter = 2
+    nvtx_enabled = False
+    for i in range(num_iters):
+        if i == start_iter:
+            torch.cuda.cudart().cudaProfilerStart()
+            nvtx_enabled = True
+        if nvtx_enabled:
+            print("ITERATION", i, flush=True)
+            torch.cuda.nvtx.range_push("iteration{}".format(i))
+        llm.llm_engine.add_request(str(i), prompt=None, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
+        step_num = 0
+        while llm.llm_engine.has_unfinished_requests():
+            if nvtx_enabled:
+                torch.cuda.nvtx.range_push("step{}-{}".format(i,step_num))
+            step_num += 1
+            step_outputs = llm.llm_engine.step()
+            if nvtx_enabled:
+                torch.cuda.nvtx.range_pop()
+            for output in step_outputs:
+                if output.finished:
+                    outputs.append(output)
+        if nvtx_enabled:
+            torch.cuda.nvtx.range_pop()
+    torch.cuda.cudart().cudaProfilerStop()
+
+def bench_e2e_time(llm, sampling_params, prompt_token_ids, prompt_len):
+    outputs = []
+    num_iters = 50
+    start_iter = 20
+    for i in range(num_iters):
+        if i == start_iter:
+            torch.cuda.synchronize()
+            start_time = time.time()
+        llm.llm_engine.add_request(str(i), prompt=None, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
+        step_num = 0
+        while llm.llm_engine.has_unfinished_requests():
+            step_num += 1
+            step_outputs = llm.llm_engine.step()
+            for output in step_outputs:
+                if output.finished:
+                    outputs.append(output)
+    torch.cuda.synchronize()
+    total_time = time.time() - start_time
+
+    print(f"[BENCH] time (ms): {prompt_len} {total_time*1000/(num_iters-start_iter)}")
+
 def main(args: argparse.Namespace):
     # Parse the CLI argument and initialize the engine.
     prompt_len = args.prompt_len
@@ -24,39 +73,13 @@ def main(args: argparse.Namespace):
     # Test the following prompts.
     prompt_token_ids = all_prompt_token_ids[:prompt_len]
     sampling_params = SamplingParams(temperature=0.0, max_tokens=args.max_tokens)
-    warmup_sampling_params = SamplingParams(temperature=0.0)
 
-    # warmup
-    outputs = llm.generate(prompt_token_ids=[prompt_token_ids], sampling_params=warmup_sampling_params, use_tqdm=False)
-    print("warmup done", len(outputs), flush=True)
-    time.sleep(5)
-    if args.max_tokens == 1:
-        print("prompt_len,prompt_time(s),")
+    if args.bench_e2e_time:
+        bench_e2e_time(llm, sampling_params, prompt_token_ids, prompt_len)
+    elif args.bench_nvprof:
+        run_nvprof(llm, sampling_params, prompt_token_ids, prompt_len)
     else:
-        print("prompt_len,token_time(s),num_tokens,")
-    torch.cuda.synchronize()
-
-    num_iters = 100
-    start_time = time.time()
-    for i in range(num_iters):
-        llm.llm_engine.add_request(str(i), prompt=None, sampling_params=sampling_params, prompt_token_ids=prompt_token_ids)
-        while llm.llm_engine.has_unfinished_requests():
-            step_outputs = llm.llm_engine.step()
-            for output in step_outputs:
-                if output.finished:
-                    outputs.append(output)
-    torch.cuda.synchronize()
-    total_time = time.time() - start_time
-
-    if args.max_tokens == 1:
-        print(f"[BENCH] time: {prompt_len} {total_time*1000/num_iters}")
-    else:
-        print(f"[BENCH] time: {prompt_len} {total_time*1000/num_iters}")
-
-    # outputs = sorted(outputs, key=lambda x: int(x.request_id))
-    # for output in outputs:
-    #     print(output)
-
+        print("No benchmark selected", flush=True)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -72,5 +95,13 @@ if __name__ == '__main__':
         type=int,
         default=16,
         help='Number of tokens to sample')
+    parser.add_argument(
+        '--bench-e2e-time',
+        action='store_true',
+        help='Benchmark end-to-end time')
+    parser.add_argument(
+        '--bench-nvprof',
+        action='store_true',
+        help='Benchmark with nvprof')
     args = parser.parse_args()
     main(args)

@@ -19,6 +19,18 @@ def tensor_model_parallel_all_reduce(input_):
                                  group=get_tensor_model_parallel_group())
     return input_
 
+def tensor_model_parallel_bcast(input_, root=0):
+    """All-reduce the input tensor across model parallel group.
+
+    NOTE: This operation is applied in-place on the input tensor.
+    """
+    # Bypass the function if we are using only 1 GPU.
+    if get_tensor_model_parallel_world_size() == 1:
+        return input_
+    # Broadcast.
+    torch.distributed.broadcast(input_, root,
+                                 group=get_tensor_model_parallel_group())
+    return input_
 
 def tensor_model_parallel_all_gather(input_, dim=-1):
     """All-gather the input tensor across model parallel group."""

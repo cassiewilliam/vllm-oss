@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from mscclpp_benchmark import MscclppAllReduce1, MscclppAllReduce2, MscclppAllReduce4, MscclppAllReduce5
+from mscclpp_benchmark import MscclppAllReduce1, MscclppAllReduce2, MscclppAllReduce4, MscclppAllReduce5, bench_time
 from typing import Dict, List, Optional
 
 import time
@@ -12,7 +12,7 @@ from vllm.model_executor.parallel_utils.parallel_state import (
     get_msccl_tensor_model_parallel_rank, get_msccl_tensor_model_parallel_group,
     is_mscclpp_tp)
 from vllm.model_executor.parallel_utils.communication_op import (
-    tensor_model_parallel_all_reduce, tensor_model_parallel_all_gather)
+    tensor_model_parallel_all_reduce, tensor_model_parallel_all_gather, tensor_model_parallel_bcast)
 from vllm.model_executor.parallel_utils.utils import (
     divide, split_tensor_along_last_dim)
 from vllm.model_executor.utils import set_weight_attrs
@@ -20,6 +20,20 @@ from vllm.logger import init_logger
 
 logger = init_logger(__name__)
 
+
+def find_best_config_torch(mscclpp_call, niter, *args):
+    best_time = 10000000.0
+    for config in mscclpp_call.auto_tune():
+        cur_time = bench_time(niter, mscclpp_call, *args)
+        if cur_time < best_time:
+            best_time = cur_time
+            best_config = config
+    best_config_tensor = torch.tensor(best_config, dtype=torch.int32, device=torch.cuda.current_device())
+    best_config_tensor = tensor_model_parallel_bcast(best_config_tensor, root=0)
+    best_config = best_config_tensor.cpu().tolist()
+    if get_msccl_tensor_model_parallel_rank() == 0:
+        print(best_config, end="", flush=True)
+    return best_config
 
 class LinearMethodBase(ABC):
     """Base class for different (maybe quantized) linear methods."""
@@ -456,8 +470,8 @@ class RowParallelLinear(torch.nn.Module):
         linear_method: (Maybe quantized) linear method.
     """
     all_reduce_buff = None
-    mscclpp_ar1_call = None
-    mscclpp_ar2_call = None
+    mscclpp_ar1_call = {}
+    mscclpp_ar2_call = {}
 
     def __init__(
         self,
@@ -538,16 +552,29 @@ class RowParallelLinear(torch.nn.Module):
         b3 = self.output_size
         numel = b1 * b2 * b3
         elsize = input_parallel.element_size()
+        # print("ARSIZE", layer_idx, calltype, numel, elsize, (numel * elsize) / 1024 / 1024, "MB", flush=True)
 
-        if do_allreduce and do_msccl_tp and (RowParallelLinear.all_reduce_buff is None or RowParallelLinear.all_reduce_buff.size(0) < numel):
-            RowParallelLinear.all_reduce_buff = torch.zeros(numel, device=torch.cuda.current_device(), dtype=input_parallel.dtype)
+        # if do_allreduce and do_msccl_tp and (RowParallelLinear.all_reduce_buff is None or RowParallelLinear.all_reduce_buff.size(0) < numel):
+
+        # Uncomment this to use MSCCLPP for all-reduce
+        if do_allreduce and do_msccl_tp:
+            if RowParallelLinear.all_reduce_buff is None or RowParallelLinear.all_reduce_buff.size(0) < numel:
+                RowParallelLinear.all_reduce_buff = torch.zeros(numel, device=torch.cuda.current_device(), dtype=input_parallel.dtype)
             if numel * elsize < 2**20:
-                RowParallelLinear.mscclpp_ar2_call = MscclppAllReduce2(get_msccl_tensor_model_parallel_group(), RowParallelLinear.all_reduce_buff)
-            else:
-                RowParallelLinear.mscclpp_ar1_call = MscclppAllReduce1(get_msccl_tensor_model_parallel_group(), RowParallelLinear.all_reduce_buff)
+                if numel not in RowParallelLinear.mscclpp_ar2_call:
+                    RowParallelLinear.mscclpp_ar2_call[numel] = MscclppAllReduce2(get_msccl_tensor_model_parallel_group(), RowParallelLinear.all_reduce_buff)
+                    dummy_output = torch.zeros(numel, device=torch.cuda.current_device(), dtype=input_parallel.dtype)
+                    best_config = find_best_config_torch(RowParallelLinear.mscclpp_ar2_call[numel], 5, dummy_output, numel)
+                    RowParallelLinear.mscclpp_ar2_call[numel].set_params(*best_config)
+                    print(f"MSCCLPP AR2 {numel} {best_config}", flush=True)
+            elif numel not in RowParallelLinear.mscclpp_ar1_call:
+                RowParallelLinear.mscclpp_ar1_call[numel] = MscclppAllReduce1(get_msccl_tensor_model_parallel_group(), RowParallelLinear.all_reduce_buff)
+                best_config = find_best_config_torch(RowParallelLinear.mscclpp_ar1_call[numel], 5, numel)
+                RowParallelLinear.mscclpp_ar1_call[numel].set_params(*best_config)
+                print(f"MSCCLPP AR1 {numel} {best_config}", flush=True)
 
-        if do_allreduce and do_msccl_tp and numel * elsize < 2**20 and RowParallelLinear.mscclpp_ar2_call is None:
-            RowParallelLinear.mscclpp_ar2_call = MscclppAllReduce2(get_msccl_tensor_model_parallel_group(), RowParallelLinear.all_reduce_buff)
+        # if do_allreduce and do_msccl_tp and numel * elsize < 2**20 and RowParallelLinear.mscclpp_ar2_call is None:
+        #     RowParallelLinear.mscclpp_ar2_call = MscclppAllReduce2(get_msccl_tensor_model_parallel_group(), RowParallelLinear.all_reduce_buff)
 
         # Matrix multiply.
         output_parallel = self.linear_method.apply_weights(
@@ -562,12 +589,13 @@ class RowParallelLinear(torch.nn.Module):
         # print(f"Input sum: {torch.sum(output_parallel)}, {torch.isnan(output_parallel).any().item()}, {torch.isinf(output_parallel).any().item()}, {torch.sum(RowParallelLinear.all_reduce_buff[(b1,b2,b3)])},  {torch.isnan(RowParallelLinear.all_reduce_buff[(b1,b2,b3)]).any().item()},  {torch.isinf(RowParallelLinear.all_reduce_buff[(b1,b2,b3)]).any().item()}", flush=True)
 
         if do_allreduce:
+            # Uncomment this to use MSCCLPP for all-reduce
             if do_msccl_tp:
                 RowParallelLinear.all_reduce_buff[:numel] = output_parallel.reshape(-1)
                 if numel * elsize < 2**20:
-                    output_ = RowParallelLinear.mscclpp_ar2_call(torch.cuda.current_stream().cuda_stream, output_parallel.reshape(-1), numel).reshape(b1,b2,b3)
+                    output_ = RowParallelLinear.mscclpp_ar2_call[numel](torch.cuda.current_stream().cuda_stream, output_parallel.reshape(-1), numel).reshape(b1,b2,b3)
                 else:
-                    output_ = RowParallelLinear.mscclpp_ar1_call(torch.cuda.current_stream().cuda_stream, numel)[:numel].clone().reshape(b1,b2,b3)
+                    output_ = RowParallelLinear.mscclpp_ar1_call[numel](torch.cuda.current_stream().cuda_stream, numel)[:numel].clone().reshape(b1,b2,b3)
             else:
                 output_ = tensor_model_parallel_all_reduce(output_parallel)
             # if not torch.allclose(output_msccl, output_, atol=1):
