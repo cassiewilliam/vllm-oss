@@ -113,6 +113,10 @@ class LLMEngine:
         # Profile the memory usage and initialize the cache.
         self._init_cache()
 
+        if self.parallel_config.sep_prompt_token:
+            # Setup the MSCCL++ communication required for KV cache transfer
+            self._setup_mscclpp_comm()
+
         # Create the scheduler.
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
@@ -208,6 +212,7 @@ class LLMEngine:
             worker.set_cuda_visible_devices.remote(node_gpus[node_id])
 
         distributed_init_method = f"tcp://{driver_ip}:{get_open_port()}"
+        mscclpp_init_method = f"eth0:{driver_ip}:{get_open_port()}" if self.parallel_config.sep_prompt_token else None
 
         # Lazy import the Worker to avoid importing torch.cuda/xformers
         # before CUDA_VISIBLE_DEVICES is set in the Worker
@@ -231,6 +236,7 @@ class LLMEngine:
                     local_rank,
                     rank,
                     distributed_init_method,
+                    mscclpp_init_method,
                 ))
 
         driver_rank = 0
@@ -242,6 +248,7 @@ class LLMEngine:
             driver_local_rank,
             driver_rank,
             distributed_init_method,
+            mscclpp_init_method,
             is_driver_worker=True,
         )
 
@@ -315,6 +322,10 @@ class LLMEngine:
         # Warm up the model. This includes capturing the model into CUDA graph
         # if enforce_eager is False.
         self._run_workers("warm_up_model")
+
+    def _setup_mscclpp_comm(self) -> None:
+        """Setup MSCCL++ communication connections for KV cache transfer."""
+        self._run_workers("setup_mscclpp_comm")
 
     @classmethod
     def from_engine_args(cls, engine_args: EngineArgs) -> "LLMEngine":
