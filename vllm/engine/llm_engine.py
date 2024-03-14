@@ -251,6 +251,7 @@ class LLMEngine:
         distributed_init_method = get_distributed_init_method(
             driver_ip, get_open_port())
         mscclpp_init_method = f"eth0:{driver_ip}:{get_open_port()}" if self.parallel_config.sep_prompt_token else None
+        # print(f"MSCCLPP init method: {mscclpp_init_method}", flush=True)
 
         # Lazy import the Worker to avoid importing torch.cuda/xformers
         # before CUDA_VISIBLE_DEVICES is set in the Worker
@@ -475,6 +476,7 @@ class LLMEngine:
             prompt_token_ids=prompt_token_ids,
             lora_request=lora_request)
 
+        print(f"Prompt length: {len(prompt_token_ids)}", flush=True)
         # Create the sequences.
         block_size = self.cache_config.block_size
         seq_id = next(self.seq_counter)
@@ -1034,13 +1036,37 @@ class LLMEngine:
         if driver_kwargs is None:
             driver_kwargs = kwargs
 
-        # Start the driver worker after all the ray workers.
-        driver_worker_output = getattr(self.driver_worker,
-                                       method)(*driver_args, **driver_kwargs)
+        if method == "execute_model":
+            total_exec_time = 0
+            all_exec_time = []
+            is_prompt = driver_kwargs["seq_group_metadata_list"][0].is_prompt
+            mode = "prompt" if is_prompt else "token"
 
-        # Get the results of the ray workers.
-        if self.workers:
-            ray_worker_outputs = ray.get(ray_worker_outputs)
+            # Start the driver worker after all the ray workers.
+            driver_worker_output, exec_time, _ = getattr(self.driver_worker,
+                                        method)(*driver_args, **driver_kwargs)
+            total_exec_time += exec_time
+            all_exec_time.append(exec_time)
+
+            # Get the results of the ray workers.
+            if self.workers:
+                ray_worker_outputs_list = ray.get(ray_worker_outputs)
+                ray_worker_outputs = []
+                for (ray_worker_output, exec_time, _) in ray_worker_outputs_list:
+                    ray_worker_outputs.append(ray_worker_output)
+                    total_exec_time += exec_time
+                    all_exec_time.append(exec_time)
+            avg_exec_time = total_exec_time / len(all_exec_time)
+            all_exec_time = [f"{exec_time:.2f}" for exec_time in all_exec_time]
+
+            print(f"{mode}: avg_exec_time: {avg_exec_time: .2f}, all_exec_time: {all_exec_time}")
+        else:
+            driver_worker_output = getattr(self.driver_worker, method)(
+                *driver_args, **driver_kwargs)
+
+            # Get the results of the ray workers.
+            if self.workers:
+                ray_worker_outputs = ray.get(ray_worker_outputs)
 
         return [driver_worker_output] + ray_worker_outputs
 
@@ -1066,6 +1092,11 @@ class LLMEngine:
         if driver_kwargs is None:
             driver_kwargs = kwargs
 
+        total_exec_time = 0
+        total_kv_time = 0
+        all_exec_time = []
+        all_kv_time = []
+
         if prompt_stage:
             # Prompt workers include 1 driver worker and num_prompt_workers-1 ray workers.
             ray_worker_outputs = [
@@ -1075,7 +1106,7 @@ class LLMEngine:
             ]
 
             # Start the driver worker after all the ray workers.
-            driver_worker_output = getattr(self.driver_worker,
+            driver_worker_output, exec_time, kv_time = getattr(self.driver_worker,
                                            method)(*driver_args,
                                                    **driver_kwargs)
 
@@ -1093,10 +1124,27 @@ class LLMEngine:
                 self.parallel_config.num_prompt_workers - 1]
             driver_worker_output = driver_worker.execute_method.remote(
                 method, *driver_args, **driver_kwargs)
-            driver_worker_output = ray.get(driver_worker_output)
+            driver_worker_output, exec_time, kv_time = ray.get(driver_worker_output)
 
-            # Get the results of the ray workers.
+        total_exec_time += exec_time
+        total_kv_time += kv_time
+        all_exec_time.append(exec_time)
+        all_kv_time.append(kv_time)
+
+        # Get the results of the ray workers.
         if self.workers:
-            ray_worker_outputs = ray.get(ray_worker_outputs)
+            ray_worker_outputs_list = ray.get(ray_worker_outputs)
+            ray_worker_outputs = []
+            for (ray_worker_output, exec_time, kv_time) in ray_worker_outputs_list:
+                ray_worker_outputs.append(ray_worker_output)
+                total_exec_time += exec_time
+                total_kv_time += kv_time
+                all_exec_time.append(exec_time)
+                all_kv_time.append(kv_time)
+
+        mode = "prompt" if prompt_stage else "token"
+        avg_exec_time = total_exec_time / len(all_exec_time)
+        avg_kv_time = total_kv_time / len(all_kv_time)
+        print(f"{mode}: avg_exec_time: {avg_exec_time}, avg_kv_time: {avg_kv_time}, all_exec_time: {all_exec_time}, all_kv_time: {all_kv_time}")
 
         return [driver_worker_output] + ray_worker_outputs

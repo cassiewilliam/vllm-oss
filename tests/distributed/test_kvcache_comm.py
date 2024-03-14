@@ -32,6 +32,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.model = "meta-llama/Llama-2-70b-hf"
     args.tensor_parallel_size = 2
+    # args.model = "bigscience/bloom"
+    # args.tensor_parallel_size = 8
     args.sep_prompt_token = True
     engine = initialize_engine(args)
 

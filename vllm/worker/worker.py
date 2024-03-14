@@ -3,6 +3,7 @@ import gc
 import os
 from typing import Dict, List, Tuple, Set, Optional
 
+import time
 import torch
 import torch.distributed
 
@@ -266,6 +267,8 @@ class Worker:
         blocks_to_nw: Optional[Dict[int, List[int]]] = None,
     ) -> Optional[SamplerOutput]:
         is_prompt = False
+        exec_time = 0
+        kv_time = 0
         if self.is_driver_worker:
             assert seq_group_metadata_list is not None
             is_prompt = seq_group_metadata_list[0].is_prompt
@@ -306,13 +309,20 @@ class Worker:
             for sem_id in blocks_to_nw:
                 self.kvcache_comm_manager.wait(sem_id)
 
+        torch.cuda.synchronize()
+        exec_start = time.time()
         output = self.model_runner.execute_model(seq_group_metadata_list,
                                                  self.gpu_cache, blocks_to_nw)
+        torch.cuda.synchronize()
+        exec_time = time.time() - exec_start
 
         if len(blocks_to_nw) and self.is_prompt_worker() and is_prompt:
+            kv_start = time.time()
             for sem_id in blocks_to_nw:
                 self.kvcache_comm_manager.signal_and_flush(sem_id)
-        return output
+            torch.cuda.synchronize()
+            kv_time = time.time() - kv_start
+        return (output, exec_time * 1000, kv_time * 1000)
 
     def add_lora(self, lora_request: LoRARequest) -> bool:
         return self.model_runner.add_lora(lora_request)
@@ -340,15 +350,16 @@ class Worker:
 
     def send_recv_kvcache_all(self):
         if self.kvcache_comm_manager is not None:
+            sem_id = 2
             num_gpu_blocks = self.cache_config.num_gpu_blocks
             num_layers = self.model_config.get_num_layers(self.parallel_config)
             if self.rank < self.parallel_config.num_prompt_workers:
                 for layer_id in range(num_layers):
-                    self.kvcache_comm_manager.put(0, layer_id, 0,
+                    self.kvcache_comm_manager.put(sem_id, layer_id, 0,
                                                   num_gpu_blocks)
-                self.kvcache_comm_manager.signal_and_flush(0)
+                self.kvcache_comm_manager.signal_and_flush(sem_id)
             else:
-                self.kvcache_comm_manager.wait(0)
+                self.kvcache_comm_manager.wait(sem_id)
             torch.cuda.synchronize()
 
     def check_gpucache(self):

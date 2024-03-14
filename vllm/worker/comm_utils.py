@@ -140,6 +140,7 @@ class KVCacheCommunicator:
             flush = self.flush_counter >= FLUSH_COUNT
             if flush:
                 self.flush_counter = 0
+            # print(f"offset: {block_offset}, size: {block_size * num_blocks}", flush=True)
             params = pack(dh,
                           self.memory_ids[layer_id][head_type][remote_rank],
                           self.memory_ids[layer_id][head_type][my_rank],
