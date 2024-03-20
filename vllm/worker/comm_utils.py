@@ -1,5 +1,6 @@
 import cupy as cp
 import os
+import torch
 
 from vllm.utils import get_total_num_gpus, MAX_SLOT_IDS
 
@@ -12,7 +13,7 @@ except ImportError:
     )
 
 # Flush MSCCL++ fifo every 128 operations
-FLUSH_COUNT = 128
+FLUSH_COUNT = 2
 
 HEAD_TYPES = [0, 1]  # 0 for keys, 1 for values
 
@@ -31,15 +32,20 @@ class SendKVKernel:
             file_dir=KERNEL_DIR).get_compiled_kernel()
         self.nblocks = 1
         self.nthreads = 1
+        self.stream = cp.cuda.Stream(non_blocking=True)
 
     # nw_cache_out_kernel takes device handles, memory offset, memory size,
     # and flush flag as parameters
     def __call__(self, params):
+        cur_stream = cp.cuda.get_current_stream()
+        sync_point = cp.cuda.Event()
+        sync_point.record(stream=cur_stream)
+        self.stream.wait_event(sync_point)
         return self._kernel.launch_kernel(params,
                                           self.nblocks,
                                           self.nthreads,
                                           shared=0,
-                                          stream=None)
+                                          stream=self.stream)
 
 
 class SignalKVKernel:
@@ -54,6 +60,7 @@ class SignalKVKernel:
             file_dir=KERNEL_DIR).get_compiled_kernel()
         self.nblocks = 1
         self.nthreads = 1
+        self.stream = cp.cuda.Stream(non_blocking=True)
 
     # nw_cache_out_signal_kernel takes device handles of proxy channels
     # as parameters
@@ -62,7 +69,7 @@ class SignalKVKernel:
                                           self.nblocks,
                                           self.nthreads,
                                           shared=0,
-                                          stream=None)
+                                          stream=self.stream)
 
 
 class WaitKVKernel:
@@ -77,6 +84,7 @@ class WaitKVKernel:
             file_dir=KERNEL_DIR).get_compiled_kernel()
         self.nblocks = 1
         self.nthreads = 1
+        self.stream = cp.cuda.Stream(non_blocking=True)
 
     # nw_cache_in_kernel takes device handles of proxy channels as parameters
     def __call__(self, params):
@@ -84,7 +92,8 @@ class WaitKVKernel:
                                           self.nblocks,
                                           self.nthreads,
                                           shared=0,
-                                          stream=None)
+                                          stream=self.stream)
+                                        #   stream=self.stream)
 
 
 class KVCacheCommunicator:
@@ -113,6 +122,7 @@ class KVCacheCommunicator:
         self.send_kernel = SendKVKernel()
         self.signal_kernel = SignalKVKernel()
         self.wait_kernel = WaitKVKernel()
+        # self.comm_stream = torch.cuda.Stream()
 
     def get_device_handles(self, sem_ids):
         device_handles = [self.device_handles[sem_id] for sem_id in sem_ids]
@@ -122,11 +132,13 @@ class KVCacheCommunicator:
         dh = self.get_device_handles([sem_id])
         params = pack(dh)
         self.wait_kernel(params)
+        # self.wait_kernel(params, self.comm_stream)
 
     def signal_and_flush(self, sem_id):
         dh = self.get_device_handles([sem_id])
-        params = pack(dh)
+        params = pack(dh, self.my_rank)
         self.signal_kernel(params)
+        # self.signal_kernel(params, self.comm_stream)
         self.flush_counter = 0
 
     def put(self, sem_id, layer_id, block_start, num_blocks):
@@ -137,15 +149,16 @@ class KVCacheCommunicator:
             block_offset = block_start * block_size
             dh = self.get_device_handles([sem_id])
             self.flush_counter += 1
-            flush = self.flush_counter >= FLUSH_COUNT
+            flush = self.flush_counter >= (FLUSH_COUNT - 1)
             if flush:
                 self.flush_counter = 0
             # print(f"offset: {block_offset}, size: {block_size * num_blocks}", flush=True)
             params = pack(dh,
                           self.memory_ids[layer_id][head_type][remote_rank],
                           self.memory_ids[layer_id][head_type][my_rank],
-                          block_offset, block_size * num_blocks, flush)
+                          block_offset, block_size * num_blocks, my_rank, flush)
             self.send_kernel(params)
+            # self.send_kernel(params, self.comm_stream)
 
 
 class KVCacheCommManager:
@@ -154,6 +167,7 @@ class KVCacheCommManager:
                  mscclpp_init_method) -> None:
         self.kvcache_comm = None
         self.proxy_service = None
+        self.proxy_channel = None
 
         # Initialize the MSCCL++ group.
         self.mscclpp_group = mscclpp_comm.CommGroup(
@@ -196,7 +210,7 @@ class KVCacheCommManager:
                     self.mscclpp_conns,
                 )[self.corr_worker_rank]
             device_handles[sem_id] = proxy_channels[sem_id].device_handle().raw
-
+        self.proxy_channel = proxy_channels
         all_blocks_size = (kv_cache[0][0].numel() *
                            kv_cache[0][0].element_size())
         block_size = all_blocks_size // kv_cache[0][0].size(0)
@@ -210,6 +224,7 @@ class KVCacheCommManager:
     def destroy_comm(self) -> None:
         self.proxy_service.stop_proxy()
         del self.proxy_service
+        del self.proxy_channel
         del self.kvcache_comm
         del self.mscclpp_group
 
