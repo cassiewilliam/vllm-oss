@@ -32,20 +32,28 @@ class SendKVKernel:
             file_dir=KERNEL_DIR).get_compiled_kernel()
         self.nblocks = 1
         self.nthreads = 1
-        self.stream = cp.cuda.Stream(non_blocking=True)
+        # self.stream = cp.cuda.Stream(non_blocking=True)
+        # self.stream = torch.cuda.Stream()
+        self.cur_stream = torch.cuda.current_stream()
+        # self.stream = cp.cuda.get_current_stream()
 
     # nw_cache_out_kernel takes device handles, memory offset, memory size,
     # and flush flag as parameters
     def __call__(self, params):
-        cur_stream = cp.cuda.get_current_stream()
-        sync_point = cp.cuda.Event()
-        sync_point.record(stream=cur_stream)
-        self.stream.wait_event(sync_point)
+        # cur_stream_cp = cp.cuda.get_current_stream()
+        # sync_point = cp.cuda.Event()
+        # sync_point.record(stream=cur_stream)
+        # self.stream.wait_event(sync_point)
+        # cur_stream = torch.cuda.current_stream()
+        # print("Expected compute stream = ", cur_stream.cuda_stream, " cp_compute_stream = ", cur_stream_cp.ptr, " comm_stream =", self.stream.cuda_stream, flush=True)
+        # with torch.cuda.stream(self.stream):
+        #     self.stream.wait_stream(cur_stream)
         return self._kernel.launch_kernel(params,
                                           self.nblocks,
                                           self.nthreads,
                                           shared=0,
-                                          stream=self.stream)
+                                          stream=self.cur_stream)
+                                        #   stream=self.stream)
 
 
 class SignalKVKernel:
@@ -60,7 +68,9 @@ class SignalKVKernel:
             file_dir=KERNEL_DIR).get_compiled_kernel()
         self.nblocks = 1
         self.nthreads = 1
-        self.stream = cp.cuda.Stream(non_blocking=True)
+        # self.stream = cp.cuda.Stream(non_blocking=True)
+        # self.stream = cp.cuda.get_current_stream()
+        self.cur_stream = torch.cuda.current_stream()
 
     # nw_cache_out_signal_kernel takes device handles of proxy channels
     # as parameters
@@ -69,7 +79,8 @@ class SignalKVKernel:
                                           self.nblocks,
                                           self.nthreads,
                                           shared=0,
-                                          stream=self.stream)
+                                          stream=self.cur_stream)
+                                        #   stream=self.stream)
 
 
 class WaitKVKernel:
@@ -84,7 +95,8 @@ class WaitKVKernel:
             file_dir=KERNEL_DIR).get_compiled_kernel()
         self.nblocks = 1
         self.nthreads = 1
-        self.stream = cp.cuda.Stream(non_blocking=True)
+        self.cur_stream = torch.cuda.current_stream()
+        # self.stream = cp.cuda.Stream(non_blocking=True)
 
     # nw_cache_in_kernel takes device handles of proxy channels as parameters
     def __call__(self, params):
@@ -92,7 +104,7 @@ class WaitKVKernel:
                                           self.nblocks,
                                           self.nthreads,
                                           shared=0,
-                                          stream=self.stream)
+                                          stream=self.cur_stream)
                                         #   stream=self.stream)
 
 

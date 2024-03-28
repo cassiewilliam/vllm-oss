@@ -58,6 +58,8 @@ class Worker:
         self.is_driver_worker = is_driver_worker
         if self.is_driver_worker:
             assert self.rank == 0, "The driver worker must have rank 0."
+        self.s1 = torch.cuda.Stream()
+        torch.cuda.set_stream(self.s1)
 
         self.model_runner = ModelRunner(model_config,
                                         parallel_config,
@@ -287,11 +289,11 @@ class Worker:
                 "is_prompt": is_prompt,
             }
             broadcast_tensor_dict(data,
-                                  src=self.model_runner.driver_rank,
-                                  group=get_stage_parallel_group())
+                                src=self.model_runner.driver_rank,
+                                group=get_stage_parallel_group())
         else:
             data = broadcast_tensor_dict(src=self.model_runner.driver_rank,
-                                         group=get_stage_parallel_group())
+                                        group=get_stage_parallel_group())
             num_seq_groups = data["num_seq_groups"]
             blocks_to_swap_in = data["blocks_to_swap_in"]
             blocks_to_swap_out = data["blocks_to_swap_out"]
@@ -312,7 +314,7 @@ class Worker:
         torch.cuda.synchronize()
         exec_start = time.time()
         output = self.model_runner.execute_model(seq_group_metadata_list,
-                                                 self.gpu_cache, blocks_to_nw)
+                                                self.gpu_cache, blocks_to_nw)
         torch.cuda.synchronize()
         exec_time = time.time() - exec_start
 

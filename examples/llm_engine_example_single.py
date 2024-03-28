@@ -6,20 +6,20 @@ from vllm import EngineArgs, LLMEngine, SamplingParams, RequestOutput
 
 def create_test_prompts() -> List[Tuple[str, SamplingParams]]:
     """Create a list of test prompts with their sampling parameters."""
-    return [
-        ("A robot may not injure a human being " * 20,
-         SamplingParams(temperature=0.0, logprobs=1, prompt_logprobs=1)),
-         ]
     # return [
-    #     ("A robot may not injure a human being",
+    #     ("A robot may not injure a human being " * 20,
     #      SamplingParams(temperature=0.0, logprobs=1, prompt_logprobs=1)),
-    #     ("To be or not to be,",
-    #      SamplingParams(temperature=0.0)),
-    #     ("What is the meaning of life?",
-    #      SamplingParams(temperature=0.0)),
-    #     ("It is only with the heart that one can see rightly",
-    #      SamplingParams(temperature=0.0)),
-    # ]
+    #      ]
+    return [
+        ("A robot may not injure a human being",
+         SamplingParams(temperature=0.0, logprobs=1, prompt_logprobs=1)),
+        ("To be or not to be,",
+         SamplingParams(temperature=0.0)),
+        ("What is the meaning of life?",
+         SamplingParams(temperature=0.0)),
+        ("It is only with the heart that one can see rightly",
+         SamplingParams(temperature=0.0)),
+    ]
 
 
 def process_requests(engine: LLMEngine,
