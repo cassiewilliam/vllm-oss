@@ -11,6 +11,7 @@ from vllm.model_executor.parallel_utils import pynccl_utils
 
 # Tensor model parallel group that the current rank belongs to.
 _TENSOR_MODEL_PARALLEL_GROUP = None
+_MSCCLPP_TENSOR_MODEL_PARALLEL_GROUP = None
 # Pipeline model parallel group that the current rank belongs to.
 _PIPELINE_MODEL_PARALLEL_GROUP = None
 
@@ -109,6 +110,31 @@ def ensure_model_parallel_initialized(
         "pipeline parallel group already initialized, but of unexpected size: "
         f"{get_pipeline_model_parallel_world_size()=} vs. "
         f"{pipeline_model_parallel_size=}")
+
+
+def init_mscclpp_group(rank, world_size, mscclpp_init_method):
+    import mscclpp.comm as mscclpp_comm
+    mscclpp_group = mscclpp_comm.CommGroup(
+            rank=rank,
+            size=world_size,
+            interfaceIpPortTrio=mscclpp_init_method,
+        )
+    global _MSCCLPP_TENSOR_MODEL_PARALLEL_GROUP
+    _MSCCLPP_TENSOR_MODEL_PARALLEL_GROUP = mscclpp_group
+
+
+def get_msccl_tensor_model_parallel_group():
+    """Get the tensor model parallel group the caller rank belongs to."""
+    assert _MSCCLPP_TENSOR_MODEL_PARALLEL_GROUP is not None, (
+        "mscclpp tensor model parallel group is not initialized")
+    return _MSCCLPP_TENSOR_MODEL_PARALLEL_GROUP
+
+
+def get_msccl_tensor_model_parallel_rank():
+    """Get the tensor model parallel group the caller rank belongs to."""
+    assert _MSCCLPP_TENSOR_MODEL_PARALLEL_GROUP is not None, (
+        "mscclpp tensor model parallel group is not initialized")
+    return _MSCCLPP_TENSOR_MODEL_PARALLEL_GROUP.my_rank
 
 
 def model_parallel_is_initialized():

@@ -21,6 +21,7 @@ class EngineArgs:
     dtype: str = 'auto'
     kv_cache_dtype: str = 'auto'
     seed: int = 0
+    do_mscclpp_tp : bool = False
     max_model_len: Optional[int] = None
     worker_use_ray: bool = False
     pipeline_parallel_size: int = 1
@@ -164,6 +165,9 @@ class EngineArgs:
                             help='model context length. If unspecified, '
                             'will be automatically derived from the model.')
         # Parallel arguments
+        parser.add_argument('--do-mscclpp-tp',
+                            action='store_true',
+                            help='use MSCCL++ for tensor parallel AllReduce')
         parser.add_argument('--worker-use-ray',
                             action='store_true',
                             help='use Ray for distributed serving, will be '
@@ -394,8 +398,8 @@ class EngineArgs:
                                    self.enable_prefix_caching)
         parallel_config = ParallelConfig(
             self.pipeline_parallel_size, self.tensor_parallel_size,
-            self.worker_use_ray, self.max_parallel_loading_workers,
-            self.disable_custom_all_reduce,
+            self.worker_use_ray, self.do_mscclpp_tp,
+            self.max_parallel_loading_workers, self.disable_custom_all_reduce,
             TokenizerPoolConfig.create_config(
                 self.tokenizer_pool_size,
                 self.tokenizer_pool_type,

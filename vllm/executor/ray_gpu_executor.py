@@ -140,6 +140,7 @@ class RayGPUExecutor(ExecutorBase):
 
         distributed_init_method = get_distributed_init_method(
             driver_ip, get_open_port())
+        mscclpp_init_method = f"eth0:{driver_ip}:{get_open_port()}" if self.parallel_config.do_mscclpp_tp else None
 
         # Lazy import the Worker to avoid importing torch.cuda/xformers
         # before CUDA_VISIBLE_DEVICES is set in the Worker
@@ -167,6 +168,7 @@ class RayGPUExecutor(ExecutorBase):
                     local_rank,
                     rank,
                     distributed_init_method,
+                    mscclpp_init_method,
                     lora_config=lora_config,
                     kv_cache_dtype=kv_cache_dtype,
                 ))
@@ -182,6 +184,7 @@ class RayGPUExecutor(ExecutorBase):
             driver_local_rank,
             driver_rank,
             distributed_init_method,
+            mscclpp_init_method,
             lora_config=self.lora_config,
             vision_language_config=self.vision_language_config,
             kv_cache_dtype=kv_cache_dtype,

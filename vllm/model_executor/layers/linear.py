@@ -8,6 +8,7 @@ from torch.nn.parameter import Parameter
 from vllm.logger import init_logger
 from vllm.model_executor.parallel_utils.communication_op import (
     tensor_model_parallel_all_gather, tensor_model_parallel_all_reduce)
+from vllm.model_executor.parallel_utils.mscclpp_allreduce import MscclppAllReduce
 from vllm.model_executor.parallel_utils.parallel_state import (
     get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size)
 from vllm.model_executor.parallel_utils.utils import (
@@ -571,8 +572,13 @@ class RowParallelLinear(torch.nn.Module):
         # Matrix multiply.
         output_parallel = self.linear_method.apply_weights(
             self.linear_weights, input_parallel)
+
+        do_mscclpp_tp = True
         if self.reduce_results and self.tp_size > 1:
-            output_ = tensor_model_parallel_all_reduce(output_parallel)
+            if do_mscclpp_tp:
+                output_ = MscclppAllReduce.mscclpp_allreduce(output_parallel)
+            else:
+                output_ = tensor_model_parallel_all_reduce(output_parallel)
         else:
             output_ = output_parallel
 

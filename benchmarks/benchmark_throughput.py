@@ -74,6 +74,7 @@ def run_vllm(
     kv_cache_dtype: str,
     device: str,
     enable_prefix_caching: bool,
+    do_mscclpp_tp: bool,
     gpu_memory_utilization: float = 0.9,
     download_dir: Optional[str] = None,
 ) -> float:
@@ -91,7 +92,8 @@ def run_vllm(
               kv_cache_dtype=kv_cache_dtype,
               device=device,
               enable_prefix_caching=enable_prefix_caching,
-              download_dir=download_dir)
+              download_dir=download_dir,
+              do_mscclpp_tp=do_mscclpp_tp)
 
     # Add the requests to the engine.
     for prompt, _, output_len in requests:
@@ -217,7 +219,9 @@ def main(args: argparse.Namespace):
                                 args.max_model_len, args.enforce_eager,
                                 args.kv_cache_dtype, args.device,
                                 args.enable_prefix_caching,
-                                args.gpu_memory_utilization, args.download_dir)
+                                args.do_mscclpp_tp,
+                                args.gpu_memory_utilization, args.download_dir,
+                                )
     elif args.backend == "hf":
         assert args.tensor_parallel_size == 1
         elapsed_time = run_hf(requests, args.model, tokenizer, args.n,
@@ -277,6 +281,9 @@ if __name__ == "__main__":
     parser.add_argument('--trust-remote-code',
                         action='store_true',
                         help='trust remote code from huggingface')
+    parser.add_argument('--do-mscclpp-tp',
+                        action='store_true',
+                        help='Use MSCCL++')
     parser.add_argument(
         '--max-model-len',
         type=int,

@@ -15,7 +15,7 @@ from vllm.model_executor.parallel_utils.communication_op import (
     broadcast_tensor_dict)
 from vllm.model_executor.parallel_utils.custom_all_reduce import init_custom_ar
 from vllm.model_executor.parallel_utils.parallel_state import (
-    ensure_model_parallel_initialized)
+    ensure_model_parallel_initialized, init_mscclpp_group)
 from vllm.sequence import SamplerOutput, SequenceGroupMetadata
 from vllm.worker.cache_engine import CacheEngine
 from vllm.worker.model_runner import ModelRunner
@@ -38,6 +38,7 @@ class Worker:
         local_rank: int,
         rank: int,
         distributed_init_method: str,
+        mscclpp_init_method: str,
         lora_config: Optional[LoRAConfig] = None,
         vision_language_config: Optional[VisionLanguageConfig] = None,
         kv_cache_dtype: Optional[str] = "auto",
@@ -50,6 +51,7 @@ class Worker:
         self.local_rank = local_rank
         self.rank = rank
         self.distributed_init_method = distributed_init_method
+        self.mscclpp_init_method = mscclpp_init_method
         self.lora_config = lora_config
         self.is_driver_worker = is_driver_worker
         if self.is_driver_worker:
@@ -98,7 +100,8 @@ class Worker:
                 f"Not support device type: {self.device_config.device}")
         # Initialize the distributed environment.
         init_distributed_environment(self.parallel_config, self.rank,
-                                     self.distributed_init_method)
+                                     self.distributed_init_method,
+                                     self.mscclpp_init_method)
         # Set random seed.
         set_random_seed(self.model_config.seed)
 
@@ -251,6 +254,7 @@ def init_distributed_environment(
     parallel_config: ParallelConfig,
     rank: int,
     distributed_init_method: Optional[str] = None,
+    mscclpp_init_method: Optional[str] = None,
 ) -> None:
     """Initialize the distributed environment."""
     if torch.distributed.is_initialized():
@@ -299,6 +303,10 @@ def init_distributed_environment(
     # Initialize a custom fast all-reduce implementation.
     if not parallel_config.disable_custom_all_reduce:
         init_custom_ar()
+
+    if parallel_config.do_mscclpp_tp:
+        assert mscclpp_init_method is not None
+        init_mscclpp_group(rank, parallel_config.world_size, mscclpp_init_method)
 
 
 def _check_if_gpu_supports_dtype(torch_dtype: torch.dtype):
