@@ -13,7 +13,7 @@ except ImportError:
     )
 
 # Flush MSCCL++ fifo every 128 operations
-FLUSH_COUNT = 128
+FLUSH_COUNT = 2
 
 HEAD_TYPES = [0, 1]  # 0 for keys, 1 for values
 
@@ -37,6 +37,10 @@ class SendKVKernel:
     # nw_cache_out_kernel takes device handles, memory offset, memory size,
     # and flush flag as parameters
     def __call__(self, params):
+        cur_stream = cp.cuda.get_current_stream()
+        sync_point = cp.cuda.Event()
+        sync_point.record(stream=cur_stream)
+        self.stream.wait_event(sync_point)
         return self._kernel.launch_kernel(params,
                                           self.nblocks,
                                           self.nthreads,
@@ -117,6 +121,7 @@ class KVCacheCommunicator:
         self.send_kernel = SendKVKernel()
         self.signal_kernel = SignalKVKernel()
         self.wait_kernel = WaitKVKernel()
+        # self.comm_stream = torch.cuda.Stream()
 
     def get_device_handles(self, sem_ids):
         device_handles = [self.device_handles[sem_id] for sem_id in sem_ids]
@@ -126,11 +131,13 @@ class KVCacheCommunicator:
         dh = self.get_device_handles([sem_id])
         params = pack(dh)
         self.wait_kernel(params)
+        # self.wait_kernel(params, self.comm_stream)
 
     def signal_and_flush(self, sem_id):
         dh = self.get_device_handles([sem_id])
-        params = pack(dh)
+        params = pack(dh, self.my_rank)
         self.signal_kernel(params)
+        # self.signal_kernel(params, self.comm_stream)
         self.flush_counter = 0
 
     def put(self, sem_id, layer_id, block_start, num_blocks):
@@ -147,8 +154,9 @@ class KVCacheCommunicator:
             params = pack(dh,
                           self.memory_ids[layer_id][head_type][remote_rank],
                           self.memory_ids[layer_id][head_type][my_rank],
-                          block_offset, block_size * num_blocks, flush)
+                          block_offset, block_size * num_blocks, my_rank, flush)
             self.send_kernel(params)
+            # self.send_kernel(params, self.comm_stream)
 
 
 class KVCacheCommManager:
