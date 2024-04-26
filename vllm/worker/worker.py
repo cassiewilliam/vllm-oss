@@ -58,8 +58,8 @@ class Worker:
         self.is_driver_worker = is_driver_worker
         if self.is_driver_worker:
             assert self.rank == 0, "The driver worker must have rank 0."
-        self.s1 = torch.cuda.Stream()
-        torch.cuda.set_stream(self.s1)
+        self.comp_stream = torch.cuda.Stream()
+        torch.cuda.set_stream(self.comp_stream)
 
         self.model_runner = ModelRunner(model_config,
                                         parallel_config,

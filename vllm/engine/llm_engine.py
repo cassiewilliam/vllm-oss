@@ -251,7 +251,6 @@ class LLMEngine:
         distributed_init_method = get_distributed_init_method(
             driver_ip, get_open_port())
         mscclpp_init_method = f"eth0:{driver_ip}:{get_open_port()}" if self.parallel_config.sep_prompt_token else None
-        # print(f"MSCCLPP init method: {mscclpp_init_method}", flush=True)
 
         # Lazy import the Worker to avoid importing torch.cuda/xformers
         # before CUDA_VISIBLE_DEVICES is set in the Worker

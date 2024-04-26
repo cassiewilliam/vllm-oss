@@ -6,8 +6,9 @@ from vllm import EngineArgs, LLMEngine, SamplingParams, RequestOutput
 
 def create_test_prompts() -> List[Tuple[str, SamplingParams]]:
     """Create a list of test prompts with their sampling parameters."""
+    # prompt_str = "A robot may not injure a human being. " * 20 + "Repeat this 1 more time."
     # return [
-    #     ("A robot may not injure a human being " * 20,
+    #     (prompt_str,
     #      SamplingParams(temperature=0.0, logprobs=1, prompt_logprobs=1)),
     #      ]
     return [
