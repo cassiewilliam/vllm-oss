@@ -4,7 +4,7 @@ extern "C" __global__ void __launch_bounds__(1024, 1)
     nw_cache_in_kernel(mscclpp::ProxyChannelDeviceHandle* proxyChannel) {
   int globalIndex = blockIdx.x * blockDim.x + threadIdx.x;
   if (globalIndex == 0) {
-    proxyChannel[0].wait(100000000);
+    proxyChannel[0].wait(-1);
   }
 }
 
