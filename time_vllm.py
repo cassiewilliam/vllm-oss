@@ -20,19 +20,18 @@ parser.add_argument("--test_perf", action='store_true', help="test performance t
 parser.add_argument("--separate_pt", action='store_true', help="separate prompt token")
 args = parser.parse_args()
 
-max_model_len = (args.max_new_tokens + args.input_size + 2) * args.batch_size
+max_model_len = (args.max_new_tokens + args.input_size) * args.batch_size
 llm = LLM(args.model,
         tensor_parallel_size=args.tensor_para_size,
         dtype=torch.float16,
         max_model_len=max_model_len,
         disable_log_stats=False,
         sep_prompt_token=args.separate_pt,
-        enforce_eager=True
         )
 
 tokenizer = llm.get_tokenizer()
 
-with open('/home/superbench/aashaka/vllm-oss/examples/seattle.txt', 'r') as f:
+with open('/home/azureuser/aashaka/new_vllm/examples/seattle.txt', 'r') as f:
     text = f.read()
     encoded_text = tokenizer(text).input_ids
     prompt = tokenizer.decode(encoded_text[:args.input_size])

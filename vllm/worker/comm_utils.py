@@ -13,7 +13,7 @@ except ImportError:
     )
 
 # Flush MSCCL++ fifo every 128 operations
-FLUSH_COUNT = 2
+FLUSH_COUNT = 128
 
 HEAD_TYPES = [0, 1]  # 0 for keys, 1 for values
 
