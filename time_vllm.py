@@ -31,7 +31,7 @@ llm = LLM(args.model,
 
 tokenizer = llm.get_tokenizer()
 
-with open('/home/azureuser/aashaka/new_vllm/examples/seattle.txt', 'r') as f:
+with open('/workspace/vllm-oss/examples/seattle.txt', 'r') as f:
     text = f.read()
     encoded_text = tokenizer(text).input_ids
     prompt = tokenizer.decode(encoded_text[:args.input_size])
