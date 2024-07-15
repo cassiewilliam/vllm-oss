@@ -6,6 +6,7 @@ from vllm.utils import get_total_num_gpus, MAX_SLOT_IDS
 
 try:
     import mscclpp.comm as mscclpp_comm
+    from mscclpp import Transport
     from mscclpp.utils import KernelBuilder, pack
 except ImportError:
     raise ImportError(
@@ -180,8 +181,9 @@ class KVCacheCommManager:
 
         # Setup up connections.
         self.corr_worker_rank = (rank + num_prompt_workers) % world_size
-        transport = self.mscclpp_group.my_ib_device(rank %
-                                                    get_total_num_gpus())
+        # transport = self.mscclpp_group.my_ib_device(rank %
+        #                                             get_total_num_gpus())
+        transport = Transport.CudaIpc
         self.mscclpp_conns = self.mscclpp_group.make_connection(
             [self.corr_worker_rank], transport)
 

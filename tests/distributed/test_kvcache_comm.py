@@ -30,8 +30,8 @@ if __name__ == '__main__':
         description='Demo on using the LLMEngine class directly')
     parser = EngineArgs.add_cli_args(parser)
     args = parser.parse_args()
-    args.model = "meta-llama/Llama-2-70b-hf"
-    args.tensor_parallel_size = 2
+    # args.model = "meta-llama/Llama-2-70b-hf"
+    # args.tensor_parallel_size = 2
     # args.model = "bigscience/bloom"
     # args.tensor_parallel_size = 8
     args.sep_prompt_token = True

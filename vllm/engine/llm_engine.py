@@ -30,6 +30,33 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 _LOCAL_LOGGING_INTERVAL_SEC = 5
 
+import netifaces as ni
+import ipaddress
+
+def is_valid(ip):
+    """
+    Check if the IP address is valid for connecting to other devices.
+    This excludes loopback (127.0.0.1) and link-local (169.254.x.x) addresses.
+    """
+    ip_obj = ipaddress.ip_address(ip)
+    return not (ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast)
+
+def get_netinterface_info(driver_ip):
+    """
+    Returns the name of the first network interface with a valid IP address that it finds.
+    """
+    interfaces = ni.interfaces()
+    for interface in interfaces:
+        addresses = ni.ifaddresses(interface)
+        if ni.AF_INET in addresses:
+            for addr in addresses[ni.AF_INET]:
+                ip_address = addr["addr"]
+                if not (ip_address == driver_ip):
+                    continue
+                if is_valid(ip_address):
+                    print(f"Selected Interface: {interface}, IP Address: {ip_address}")
+                    return interface, ip_address
+    return None, None
 
 class LLMEngine:
     """An LLM engine that receives requests and generates texts.
@@ -250,7 +277,14 @@ class LLMEngine:
 
         distributed_init_method = get_distributed_init_method(
             driver_ip, get_open_port())
-        mscclpp_init_method = f"eth0:{driver_ip}:{get_open_port()}" if self.parallel_config.sep_prompt_token else None
+        
+        if self.parallel_config.sep_prompt_token:
+            network_interface, mscclpp_ip = get_netinterface_info(driver_ip)
+            mscclpp_init_method = f"{network_interface}:{driver_ip}:{get_open_port()}"
+            print(f"network_interface: {network_interface}")
+            # mscclpp_init_method = f"eth0:{driver_ip}:{get_open_port()}"
+        else:
+            mscclpp_init_method = None
 
         # Lazy import the Worker to avoid importing torch.cuda/xformers
         # before CUDA_VISIBLE_DEVICES is set in the Worker
