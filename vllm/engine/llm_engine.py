@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from ray.util.placement_group import PlacementGroup
 
 logger = init_logger(__name__)
-_LOCAL_LOGGING_INTERVAL_SEC = 5
+_LOCAL_LOGGING_INTERVAL_SEC = 100
 
 import netifaces as ni
 import ipaddress
@@ -509,7 +509,7 @@ class LLMEngine:
             prompt_token_ids=prompt_token_ids,
             lora_request=lora_request)
 
-        print(f"Prompt length: {len(prompt_token_ids)}", flush=True)
+        # print(f"Prompt length: {len(prompt_token_ids)}", flush=True)
         # Create the sequences.
         block_size = self.cache_config.block_size
         seq_id = next(self.seq_counter)
@@ -1092,7 +1092,7 @@ class LLMEngine:
             avg_exec_time = total_exec_time / len(all_exec_time)
             all_exec_time = [f"{exec_time:.2f}" for exec_time in all_exec_time]
 
-            print(f"{mode}: avg_exec_time: {avg_exec_time: .2f}, all_exec_time: {all_exec_time}")
+            # print(f"{mode}: avg_exec_time: {avg_exec_time: .2f}, all_exec_time: {all_exec_time}")
         else:
             driver_worker_output = getattr(self.driver_worker, method)(
                 *driver_args, **driver_kwargs)
@@ -1178,6 +1178,6 @@ class LLMEngine:
         mode = "prompt" if prompt_stage else "token"
         avg_exec_time = total_exec_time / len(all_exec_time)
         avg_kv_time = total_kv_time / len(all_kv_time)
-        print(f"{mode}: avg_exec_time: {avg_exec_time}, avg_kv_time: {avg_kv_time}, all_exec_time: {all_exec_time}, all_kv_time: {all_kv_time}")
+        # print(f"{mode}: avg_exec_time: {avg_exec_time}, avg_kv_time: {avg_kv_time}, all_exec_time: {all_exec_time}, all_kv_time: {all_kv_time}")
 
         return [driver_worker_output] + ray_worker_outputs
