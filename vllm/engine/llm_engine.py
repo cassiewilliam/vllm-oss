@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from ray.util.placement_group import PlacementGroup
 
 logger = init_logger(__name__)
-_LOCAL_LOGGING_INTERVAL_SEC = 100
+_LOCAL_LOGGING_INTERVAL_SEC = 10
 
 import netifaces as ni
 import ipaddress

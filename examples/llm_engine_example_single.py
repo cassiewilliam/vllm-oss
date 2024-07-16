@@ -51,6 +51,8 @@ def process_requests(engine: LLMEngine, test_prompts: List[str], max_tokens = 25
     request_id = 0
     step_id = 0
 
+    num_requests = len(test_prompts)
+
     ttft_start_time: Dict[int, float] = {}
     ttft_latency: Dict[int, float] = {}
     e2e_latency: Dict[int, float] = {}
@@ -74,12 +76,16 @@ def process_requests(engine: LLMEngine, test_prompts: List[str], max_tokens = 25
              for request_output in request_outputs:
                 output_request_id = request_output.request_id
                 if (output_request_id not in ttft_latency.keys()):
-                    ttft_latency[output_request_id] = (end - ttft_start_time[int(output_request_id)])
-                else:
+                    ttft_latency[output_request_id] = (end - ttft_start_time[int(output_request_id)]) * 1000
+                # else:
+                #     tbt_latency[output_request_id].extend([step_time])
+                elif num_requests != len(ttft_latency.keys()):
+                    # NOTE: 只统计prefill和decode交叉运行在一起的部分
+                    #       如果prefill运行完成了，此时prefill gpu空闲，统计数据意义不大
                     tbt_latency[output_request_id].extend([step_time])
                 
                 if request_output.finished:
-                    e2e_latency[output_request_id] = (end - ttft_start_time[int(output_request_id)])
+                    e2e_latency[output_request_id] = (end - ttft_start_time[int(output_request_id)]) * 1000
              if np.random.poisson(1) > 0 and test_prompts:
                 engine.add_request(str(request_id), test_prompts.pop(0), sampling_params)
                 ttft_start_time[request_id] = time.perf_counter()
@@ -98,7 +104,7 @@ def process_requests(engine: LLMEngine, test_prompts: List[str], max_tokens = 25
     # 计算均值
     print(f"e2e_latency: {e2e_latency}")
     print(f"ttft_latency: {ttft_latency}")
-    print(f"tbt_latency: {tbt_latency}")
+    # print(f"tbt_latency: {tbt_latency}")
     mean_e2e_latency = sum(e2e_latency.values()) / len(e2e_latency.values())
     mean_ttft_latency = sum(ttft_latency.values()) / len(ttft_latency.values())
     mean_tbt_latency = sum(all_latencies) / len(all_latencies) if all_latencies else 0
